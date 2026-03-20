@@ -184,15 +184,30 @@ class ARPGuiController(ctk.CTk):
         
         ctk.CTkLabel(list_frame, text="在线设备", font=("Arial", 14, "bold")).pack(pady=10)
         
-        # 表格
+        # 表格 - 使用tkinter的Treeview (customtkinter没有CTkTreeview)
+        from tkinter import ttk
         columns = ('ip', 'mac', 'status')
-        self.device_tree = ctk.CTkTreeview(list_frame, columns=columns, show='headings', height=12)
+        self.device_tree = ttk.Treeview(list_frame, columns=columns, show='headings', height=12)
         self.device_tree.heading('ip', text='IP地址')
         self.device_tree.heading('mac', text='MAC地址')
         self.device_tree.heading('status', text='状态')
         self.device_tree.column('ip', width=150)
         self.device_tree.column('mac', width=180)
         self.device_tree.column('status', width=100)
+        
+        # 设置样式适配深色主题
+        style = ttk.Style()
+        style.theme_use('clam')
+        style.configure("Treeview", 
+                       background="#2b2b2b", 
+                       foreground="white", 
+                       fieldbackground="#2b2b2b",
+                       rowheight=25)
+        style.configure("Treeview.Heading", 
+                       background="#1f538d", 
+                       foreground="white")
+        style.map("Treeview", background=[('selected', '#1f538d')])
+        
         self.device_tree.pack(fill="both", expand=True, padx=10, pady=5)
         
         # 选中事件
