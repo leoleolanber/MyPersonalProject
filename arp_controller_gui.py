@@ -358,16 +358,23 @@ class ARPGuiController(ctk.CTk):
         self.block_with_firewall(ips, duration)
     
     def block_with_firewall(self, ips, duration):
-        """使用Windows防火墙阻断"""
+        """使用Windows防火墙阻断 (同时阻断入站和出站)"""
         import subprocess
         
         rules = []
         for ip in ips:
-            rule_name = f"BLOCK_{ip.replace('.', '_')}"
+            rule_name_in = f"BLOCK_IN_{ip.replace('.', '_')}"
+            rule_name_out = f"BLOCK_OUT_{ip.replace('.', '_')}"
             try:
-                cmd = f'netsh advfirewall firewall add rule name="{rule_name}" dir=in action=block remoteip={ip}'
-                subprocess.run(cmd, shell=True, capture_output=True, timeout=10)
-                rules.append(rule_name)
+                # 阻断入站
+                cmd_in = f'netsh advfirewall firewall add rule name="{rule_name_in}" dir=in action=block remoteip={ip}'
+                subprocess.run(cmd_in, shell=True, capture_output=True, timeout=10)
+                
+                # 阻断出站 (关键!)
+                cmd_out = f'netsh advfirewall firewall add rule name="{rule_name_out}" dir=out action=block remoteip={ip}'
+                subprocess.run(cmd_out, shell=True, capture_output=True, timeout=10)
+                
+                rules.append((rule_name_in, rule_name_out))
                 
                 # 更新UI
                 for item in self.device_tree.get_children():
@@ -385,10 +392,12 @@ class ARPGuiController(ctk.CTk):
         # 定时解除
         def unblock_after_delay():
             time.sleep(duration)
-            for rule_name in rules:
+            for rule_name_in, rule_name_out in rules:
                 try:
-                    cmd = f'netsh advfirewall firewall delete rule name="{rule_name}"'
-                    subprocess.run(cmd, shell=True, capture_output=True, timeout=10)
+                    subprocess.run(f'netsh advfirewall firewall delete rule name="{rule_name_in}"', 
+                                   shell=True, capture_output=True, timeout=10)
+                    subprocess.run(f'netsh advfirewall firewall delete rule name="{rule_name_out}"', 
+                                   shell=True, capture_output=True, timeout=10)
                 except:
                     pass
             
